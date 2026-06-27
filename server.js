@@ -58,10 +58,16 @@ app.post('/api/pay', async (req, res) => {
     const amount = PRIX[product]; // montant fixé côté serveur, jamais envoyé par le client
 
     // Format du numéro au format international (+242 pour le Congo)
-    let msisdn = phone.replace(/\s+/g, '');
-    if (!msisdn.startsWith('+')) {
-      // retire un éventuel 0 initial puis préfixe +242
-      msisdn = '+242' + msisdn.replace(/^0+/, '');
+    // Au Congo, les mobiles ont 9 chiffres AVEC le 0 initial (ex: 06 XXX XX XX).
+    // MTN/Airtel MoMo attendent généralement le 0 conservé après +242.
+    let msisdn = phone.replace(/[\s\-\.]/g, ''); // enlève espaces, tirets, points
+    if (msisdn.startsWith('+')) {
+      // déjà au format international, on garde tel quel
+    } else if (msisdn.startsWith('242')) {
+      msisdn = '+' + msisdn;
+    } else {
+      // numéro local : on préfixe +242 en GARDANT le 0 initial
+      msisdn = '+242' + msisdn;
     }
 
     // 2) ÉTAPE 1 — Créer l'intention de paiement
@@ -89,6 +95,12 @@ app.post('/api/pay', async (req, res) => {
     const intentId = createData.id;
     const clientSecret = createData.clientSecret;
 
+    // LOG : montre le numéro reformaté et l'opérateur envoyés à YaBeTooPay
+    console.log('--- TENTATIVE PAIEMENT ---');
+    console.log('Produit:', product, '| Montant:', amount);
+    console.log('Numéro reçu du site:', phone, '| Reformaté en msisdn:', msisdn, '| Opérateur:', operator);
+    console.log('Intention créée, id:', intentId);
+
     // 3) ÉTAPE 2 — Confirmer l'intention avec le Mobile Money du client
     const confirmResp = await fetch(`${YABETOO_BASE_URL}/v1/payment-intents/${intentId}/confirm`, {
       method: 'POST',
@@ -111,6 +123,9 @@ app.post('/api/pay', async (req, res) => {
 
     const confirmData = await confirmResp.json();
 
+    // LOG : montre la réponse complète de YaBeTooPay
+    console.log('Réponse confirmation YaBeTooPay:', JSON.stringify(confirmData));
+
     // 4) Analyse du résultat
     if (confirmData.status === 'succeeded' && confirmData.captured === true) {
       // Paiement réussi et capturé → on autorise la suite côté client
@@ -123,7 +138,7 @@ app.post('/api/pay', async (req, res) => {
       // Paiement échoué (timeout, fonds insuffisants, etc.)
       return res.json({
         status: 'failed',
-        reason: confirmData.failureMessage || confirmData.status || 'Paiement non abouti',
+        reason: confirmData.failureMessage || confirmData.message || confirmData.status || 'Paiement non abouti',
       });
     }
   } catch (err) {
